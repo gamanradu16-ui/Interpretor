@@ -21,9 +21,9 @@ struct ExecutionResult
 };
 void print_value(const Value &value, ostream &out)
 {
-    if (holds_alternative<int>(value))
+    if (holds_alternative<BigInt>(value))
     {
-        out << get<int>(value);
+        out << get<BigInt>(value);
     }
     else if (holds_alternative<bool>(value))
     {
@@ -49,18 +49,82 @@ void print_value(const Value &value, ostream &out)
 
         out << "]";
     }
+    else if (holds_alternative<shared_ptr<DictionaryValue>>(value))
+    {
+        auto dict = get<shared_ptr<DictionaryValue>>(value);
+        out << "{";
+        for (auto p = dict->map.begin(); p != dict->map.end(); p++)
+        {
+            if (p != dict->map.begin())
+                out << " , ";
+            print_value(p->first, out);
+            out << " : ";
+            print_value(p->second, out);
+        }
+        out << "}";
+    }
 }
 bool turn_boolean(Value x)
 {
-    if (holds_alternative<int>(x))
-        return get<int>(x) != 0;
+    if (holds_alternative<BigInt>(x))
+        return get<BigInt>(x) != 0;
 
     if (holds_alternative<string>(x))
     {
         string s = get<string>(x);
         return !s.empty();
     }
+    if (holds_alternative<shared_ptr<ListValue>>(x))
+    {
+        auto list = get<shared_ptr<ListValue>>(x);
+        return !list->elements.empty();
+    }
+    if (holds_alternative<shared_ptr<DictionaryValue>>(x))
+    {
+        auto dict = get<shared_ptr<DictionaryValue>>(x);
+        return !dict->map.empty();
+    }
+
     return get<bool>(x);
+}
+
+bool value_equals(Value &a, Value &b)
+{
+    if (holds_alternative<string>(a) && holds_alternative<string>(b))
+        return get<string>(a) == get<string>(b);
+    if (holds_alternative<BigInt>(a) && holds_alternative<BigInt>(b))
+        return get<BigInt>(a) == get<BigInt>(b);
+    if (holds_alternative<bool>(a) && holds_alternative<bool>(b))
+        return get<bool>(a) == get<bool>(b);
+
+    if (holds_alternative<shared_ptr<ListValue>>(a) && holds_alternative<shared_ptr<ListValue>>(b))
+    {
+        auto l1 = get<shared_ptr<ListValue>>(a);
+        auto l2 = get<shared_ptr<ListValue>>(b);
+        if (l1->elements.size() != l2->elements.size())
+            return false;
+        for (size_t i = 0; i < l1->elements.size(); i++)
+            if (!value_equals(l1->elements[i], l2->elements[i]))
+                return false;
+
+        return true;
+    }
+
+    if (holds_alternative<shared_ptr<DictionaryValue>>(a) && holds_alternative<shared_ptr<DictionaryValue>>(b))
+    {
+        auto d1 = get<shared_ptr<DictionaryValue>>(a);
+        auto d2 = get<shared_ptr<DictionaryValue>>(b);
+        if (d1->map.size() != d2->map.size())
+            return false;
+
+        for (auto p : d1->map)
+            if (!d2->map.count(p.first) || !value_equals(p.second, d2->map[p.first]))
+                return false;
+
+        return true;
+    }
+
+    return false;
 }
 
 string value_to_string(const Value &value)
@@ -104,7 +168,7 @@ vector<string> tokenizer(string line)
         }
         char ch = line[indx];
 
-        if (ch == '[' || ch == ']' || ch == ',' || ch == '.')
+        if (ch == '[' || ch == ']' || ch == ',' || ch == '.' || ch == '{' || ch == '}' || ch == ':')
         {
             if (!stack.empty())
                 ans.push_back(stack);
@@ -177,6 +241,7 @@ vector<string> tokenizer(string line)
                 if (!stack.empty())
                     ans.push_back(stack);
                 ans.push_back(">");
+                stack = "";
                 continue;
             }
         }
@@ -227,7 +292,7 @@ Value get_value(Token p)
 {
     Value ans;
     if (p.get_type() == TokenType::NUMBER)
-        ans = stoi(p.get_original_text());
+        ans = BigInt(p.get_original_text());
     else if (p.get_type() == TokenType::STRING)
         ans = p.get_original_text();
     else if (p.get_type() == TokenType::IDENTIFIER)
@@ -434,6 +499,72 @@ unique_ptr<Expression> parse_primary(vector<Token> &line_tokens, size_t &current
         return nullptr;
     }
 
+    if (line_tokens[current].get_type() == TokenType::OPEN_SWIRLY)
+    {
+        vector<unique_ptr<Expression>> keys, vals;
+
+        current++;
+        if (current >= line_tokens.size())
+            return nullptr;
+        if (line_tokens[current].get_type() == TokenType::CLOSED_SWIRLY)
+        {
+            current++;
+            return make_unique<MapExpression>(move(keys), move(vals));
+        }
+        if (current < line_tokens.size() && line_tokens[current].get_type() == TokenType::COMMA)
+        {
+            cerr << "Eroare initializare lista la lina " << line_tokens[current].get_line_number() << endl;
+            return nullptr;
+        }
+        while (current < line_tokens.size() && line_tokens[current].get_type() != TokenType::CLOSED_SWIRLY)
+        {
+            if (current < line_tokens.size() && (line_tokens[current].get_type() == TokenType::COMMA || line_tokens[current].get_type() == TokenType::DOUBLE_DOTS))
+            {
+                cerr << "Eroare elemente lipsa la lina " << line_tokens[current].get_line_number() << endl;
+                return nullptr;
+            }
+
+            auto key = parse_or(line_tokens, current);
+            if (!key)
+            {
+                cerr << "Eroare dictionar" << endl;
+                return nullptr;
+            }
+            if (current >= line_tokens.size() || (line_tokens[current].get_type() != TokenType::DOUBLE_DOTS || line_tokens[current].get_type() == TokenType::COMMA || line_tokens[current].get_type() == TokenType::END_OF_LINE))
+            {
+                cerr << "Eroare dictionar" << endl;
+                return nullptr;
+            }
+            current++;
+            auto val = parse_or(line_tokens, current);
+            if (!val)
+            {
+                cerr << "Eroare dictionar" << endl;
+                return nullptr;
+            }
+            keys.push_back(move(key));
+            vals.push_back(move(val));
+            if (current < line_tokens.size() && line_tokens[current].get_type() == TokenType::CLOSED_SWIRLY)
+            {
+                current++;
+                return make_unique<MapExpression>(move(keys), move(vals));
+            }
+
+            if (current >= line_tokens.size() || (line_tokens[current].get_type() != TokenType::COMMA))
+            {
+                cerr << "Eroare dictionar" << endl;
+                return nullptr;
+            }
+            if (current + 1 > line_tokens.size())
+            {
+                cerr << "Eroare dictionar" << endl;
+                return nullptr;
+            }
+            current++;
+        }
+        return nullptr;
+    }
+
     if (line_tokens[current].get_type() == TokenType::OPEN_LIST)
     {
         vector<unique_ptr<Expression>> elements;
@@ -522,7 +653,7 @@ unique_ptr<Expression> parse_primary(vector<Token> &line_tokens, size_t &current
     }
     else if (line_tokens[current].get_type() == TokenType::NUMBER)
     {
-        Value val = stoi(line_tokens[current].get_original_text());
+        Value val = BigInt(line_tokens[current].get_original_text());
         auto final_ans = make_unique<LiteralExpression>(val);
         current++;
         return final_ans;
@@ -556,6 +687,24 @@ unique_ptr<Expression> parse_primary(vector<Token> &line_tokens, size_t &current
         }
         current++;
         return final_ans;
+    }
+    else if (line_tokens[current].get_type() == TokenType::HEAR)
+    {
+        current++;
+        if (current < line_tokens.size() && line_tokens[current].get_type() == TokenType::INT)
+        {
+            current++;
+            return make_unique<HearExpression>(TokenType::INT);
+        }
+        else if (current < line_tokens.size())
+        {
+            return make_unique<HearExpression>(TokenType::STRING);
+        }
+        else
+        {
+            cerr << "Hear Incorect   " << endl;
+            return nullptr;
+        }
     }
     else
     {
@@ -797,6 +946,85 @@ unique_ptr<Statement> Parser(vector<vector<Token>> &whole_tokens, size_t &line_n
         return make_unique<FunctionStatement>(function_name, parameters, move(body));
     }
 
+    if (line_tokens[0].get_type() == TokenType::FOR)
+    {
+        size_t current = 1;
+        if (current + 2 >= line_tokens.size() || line_tokens[current].get_type() != TokenType::LET || line_tokens[current + 1].get_type() != TokenType::IDENTIFIER || line_tokens[current + 2].get_type() != TokenType::ASSIGN)
+        {
+            cerr << "Eroare For la lina " << line_tokens[current].get_line_number() << endl;
+            return nullptr;
+        }
+        current += 3;
+        auto exp = parse_or(line_tokens, current);
+        if (exp == nullptr)
+        {
+            cerr << "Eroare For , start incorect la lina " << line_number << endl;
+            return nullptr;
+        }
+        if (current >= line_tokens.size() || line_tokens[current].get_type() != TokenType::COMMA)
+        {
+            cerr << "Eroare de sintaxa For la lina " << line_number << endl;
+            return nullptr;
+        }
+        auto start = make_unique<LetStatement>(line_tokens[2].get_original_text(), move(exp));
+        current++;
+        auto condition = parse_or(line_tokens, current);
+        if (condition == nullptr)
+        {
+            cerr << "Eroare For , conditie invalida la lina " << line_number << endl;
+            return nullptr;
+        }
+        if (current >= line_tokens.size() || line_tokens[current].get_type() != TokenType::COMMA)
+        {
+            cerr << "Eroare de sintaxa for la lina " << line_number << endl;
+            return nullptr;
+        }
+        current++;
+        if (current + 1 >= line_tokens.size() || line_tokens[current].get_type() != TokenType::IDENTIFIER || line_tokens[current + 1].get_type() != TokenType::ASSIGN)
+        {
+            cerr << "Eroare for la lina " << line_number << endl;
+            return nullptr;
+        }
+        string step_name = line_tokens[current].get_original_text();
+        current += 2;
+        auto exp_step = parse_or(line_tokens, current);
+        if (!exp_step)
+        {
+            cerr << "Eroare For, Step invalid la lina " << line_number << endl;
+            return nullptr;
+        }
+        if (current >= line_tokens.size())
+        {
+            cerr << "Eroare For, sintaxa invalida la lina " << line_number << endl;
+            return nullptr;
+        }
+        auto step = make_unique<AssignmentStatement>(step_name, move(exp_step));
+        if (current >= line_tokens.size() || line_tokens[current].get_type() != TokenType::END_OF_LINE)
+        {
+            cerr << "Eroare for la lina " << line_number << endl;
+            return nullptr;
+        }
+        line_number++;
+        vector<unique_ptr<Statement>> body;
+        while (line_number < whole_tokens.size() && whole_tokens[line_number][0].get_type() != TokenType::END)
+        {
+            auto p = Parser(whole_tokens, line_number);
+            if (!p)
+            {
+                cerr << "Eroare la lina " << line_number << endl;
+                return nullptr;
+            }
+            body.push_back(move(p));
+        }
+        if (line_number >= whole_tokens.size() || whole_tokens[line_number][0].get_type() != TokenType::END)
+        {
+            cerr << "Eroare FOR, lipsa END" << endl;
+            return nullptr;
+        }
+        line_number++;
+        return make_unique<ForStatement>(move(start), move(condition), move(step), move(body));
+    }
+
     if (line_tokens[0].get_type() == TokenType::WHILE)
     {
         size_t current = 1;
@@ -935,6 +1163,43 @@ unique_ptr<Statement> Parser(vector<vector<Token>> &whole_tokens, size_t &line_n
         return make_unique<ShoutStatement>(move(expresion));
     }
 
+    if (line_tokens[0].get_type() == TokenType::IDENTIFIER)
+    {
+        size_t current = 0;
+        auto left = parse_or(line_tokens, current);
+        if (left)
+        {
+            auto left_res = dynamic_cast<IndexExpression *>(left.get());
+
+            if (left_res)
+            {
+
+                if (current >= line_tokens.size() || line_tokens[current].get_type() != TokenType::ASSIGN)
+                {
+                    cerr << "Eroare indxexpression" << endl;
+                    return nullptr;
+                }
+                current++;
+                auto new_val = parse_or(line_tokens, current);
+                if (!new_val)
+                {
+                    cerr << "Eroare indx_expression + assign + bad value" << endl;
+                    return nullptr;
+                }
+                if (current >= line_tokens.size() || line_tokens[current].get_type() != TokenType::END_OF_LINE)
+                {
+                    cerr << "Eroare Index-assign-statement + bad remeinder " << endl;
+                    return nullptr;
+                }
+
+                left.release();
+                std::unique_ptr<IndexExpression> target(left_res);
+                line_number++;
+                return make_unique<IndexAssignmentStatement>(move(target), move(new_val));
+            }
+        }
+    }
+
     if (line_tokens.size() >= 2 && line_tokens[0].get_type() == TokenType::IDENTIFIER && line_tokens[1].get_type() == TokenType::ASSIGN)
     {
         size_t current = 2;
@@ -975,6 +1240,39 @@ ExecutionResult Execute_statement(Statement *statement);
 optional<Value> evaluate_expresion(Expression *expresion)
 {
 
+    auto *hear_exp = dynamic_cast<HearExpression *>(expresion);
+    if (hear_exp)
+    {
+        Value ans;
+        string s;
+        getline(cin, s);
+        if (s.empty())
+        {
+            cerr << "Eroare Hear nu s-a auzit nimic " << endl;
+            return nullopt;
+        }
+        if (hear_exp->token == TokenType::INT)
+        {
+            if (!is_number(s))
+            {
+                cerr << "Eroare hear se astepta un numar " << endl;
+                return nullopt;
+            }
+            ans = BigInt(s);
+            return ans;
+        }
+        else if (hear_exp->token == TokenType::STRING)
+        {
+            ans = s;
+            return ans;
+        }
+        else
+        {
+            cerr << "Eroare hear" << endl;
+            return nullopt;
+        }
+    }
+
     auto *method_call_exp = dynamic_cast<MethodCallExpression *>(expresion);
     if (method_call_exp)
     {
@@ -984,89 +1282,131 @@ optional<Value> evaluate_expresion(Expression *expresion)
 
         Value object = *object_result;
 
-        if (!holds_alternative<shared_ptr<ListValue>>(object))
+        if (holds_alternative<shared_ptr<ListValue>>(object))
         {
-            cerr << "Metoda aplicabila doar pe liste " << endl;
+            auto list = get<shared_ptr<ListValue>>(object);
+            if (method_call_exp->mothod_name == "size")
+            {
+                if (!method_call_exp->arguments.empty())
+                {
+                    cerr << "Metoda nu acepta argumente " << endl;
+                    return nullopt;
+                }
+                return Value{static_cast<BigInt>(list->elements.size())};
+            }
+            else if (method_call_exp->mothod_name == "pop")
+            {
+                if (method_call_exp->arguments.empty())
+                {
+                    if (list->elements.size() <= 0)
+                    {
+                        cerr << "lita goala operatie pop imposibila " << endl;
+                        return nullopt;
+                    }
+                    Value val = list->elements.back();
+                    list->elements.pop_back();
+                    return val;
+                }
+                else if (method_call_exp->arguments.size() == 1)
+                {
+                    auto indx_result = evaluate_expresion(method_call_exp->arguments[0].get());
+                    if (!indx_result)
+                        return nullopt;
+                    Value indx = *indx_result;
+
+                    if (!holds_alternative<BigInt>(indx))
+                    {
+                        cerr << "Indexare imposibila" << endl;
+                        return nullopt;
+                    }
+
+                    if (get<BigInt>(indx) < 0 || list->elements.size() <= static_cast<size_t>(get<BigInt>(indx)))
+                    {
+                        cerr << "Index imposibil" << endl;
+                        return nullopt;
+                    }
+
+                    if (list->elements.size() <= 0)
+                    {
+                        cerr << "lita goala operatie pop imposibila " << endl;
+                        return nullopt;
+                    }
+                    Value to_be_returned = list->elements[static_cast<size_t>(get<BigInt>(indx))];
+                    list->elements.erase(list->elements.begin() + static_cast<size_t>(get<BigInt>(indx)));
+                    return to_be_returned;
+                }
+                else
+                {
+                    cerr << "metoda pop are maxim un argument " << endl;
+                    return nullopt;
+                }
+            }
+            else if (method_call_exp->mothod_name == "push")
+            {
+                if (method_call_exp->arguments.size() != 1)
+                {
+                    cerr << "Eroare de sintaxa -- push are doar un argument" << endl;
+                    return nullopt;
+                }
+                if (method_call_exp->arguments.size() == 1)
+                {
+                    auto to_be_pushed_res = evaluate_expresion(method_call_exp->arguments[0].get());
+                    if (!to_be_pushed_res)
+                        return nullopt;
+
+                    Value to_be_pushed = *to_be_pushed_res;
+
+                    list->elements.push_back(to_be_pushed);
+                    return {Value{list}};
+                }
+            }
+
+            cerr << "Meoda necunaoscuta: " << method_call_exp->mothod_name << endl;
             return nullopt;
         }
-        auto list = get<shared_ptr<ListValue>>(object);
-        if (method_call_exp->mothod_name == "size")
+        else if (holds_alternative<string>(object))
         {
-            if (!method_call_exp->arguments.empty())
+            auto s = get<string>(object);
+            if (method_call_exp->mothod_name == "size")
             {
-                cerr << "Metoda nu acepta argumente " << endl;
-                return nullopt;
+                if (!method_call_exp->arguments.empty())
+                {
+                    cerr << "Metoda size nu accepta argumente " << endl;
+                    return nullopt;
+                }
+                return Value{static_cast<BigInt>(s.size())};
             }
-            return Value{static_cast<int>(list->elements.size())};
+            cerr << "Meoda necunaoscuta: " << method_call_exp->mothod_name << endl;
+            return nullopt;
         }
-        else if (method_call_exp->mothod_name == "pop")
+        else if (holds_alternative<shared_ptr<DictionaryValue>>(object))
         {
-            if (method_call_exp->arguments.empty())
+            auto dict = get<shared_ptr<DictionaryValue>>(object);
+            if (method_call_exp->mothod_name == "count")
             {
-                if (list->elements.size() <= 0)
+                if (method_call_exp->arguments.empty() || method_call_exp->arguments.size() > 1)
                 {
-                    cerr << "lita goala operatie pop imposibila " << endl;
+                    cerr << "Metoda accepta doar un argument" << endl;
                     return nullopt;
                 }
-                Value val = list->elements.back();
-                list->elements.pop_back();
-                return val;
+                auto to_be_foun = evaluate_expresion(method_call_exp->arguments[0].get());
+                if (!to_be_foun)
+                {
+                    cerr << "Expresie invalida inauntru metodei count" << endl;
+                    return nullopt;
+                }
+                Value val = *to_be_foun;
+                if (!holds_alternative<string>(val))
+                {
+                    cerr << "Cheie invalida " << endl;
+                    return nullopt;
+                }
+                Value ans = dict->map[get<string>(val)];
+                return ans;
             }
-            else if (method_call_exp->arguments.size() == 1)
-            {
-                auto indx_result = evaluate_expresion(method_call_exp->arguments[0].get());
-                if (!indx_result)
-                    return nullopt;
-                Value indx = *indx_result;
-
-                if (!holds_alternative<int>(indx))
-                {
-                    cerr << "Indexare imposibila" << endl;
-                    return nullopt;
-                }
-
-                if (get<int>(indx) <= 0 || list->elements.size() <= static_cast<size_t>(get<int>(indx)))
-                {
-                    cerr << "Index imposibil" << endl;
-                    return nullopt;
-                }
-
-                if (list->elements.size() <= 0)
-                {
-                    cerr << "lita goala operatie pop imposibila " << endl;
-                    return nullopt;
-                }
-                Value to_be_returned = list->elements[get<int>(indx)];
-                list->elements.erase(list->elements.begin() + (get<int>(indx)));
-                return to_be_returned;
-            }
-            else
-            {
-                cerr << "metoda pop are maxim un argument " << endl;
-                return nullopt;
-            }
+            cerr << "Meoda necunaoscuta: " << method_call_exp->mothod_name << endl;
+            return nullopt;
         }
-        else if (method_call_exp->mothod_name == "push")
-        {
-            if (method_call_exp->arguments.size() != 1)
-            {
-                cerr << "Eroare de sintaxa -- push are doar un argument" << endl;
-                return nullopt;
-            }
-            if (method_call_exp->arguments.size() == 1)
-            {
-                auto to_be_pushed_res = evaluate_expresion(method_call_exp->arguments[0].get());
-                if (!to_be_pushed_res)
-                    return nullopt;
-
-                Value to_be_pushed = *to_be_pushed_res;
-
-                list->elements.push_back(to_be_pushed);
-                return {Value{list}};
-            }
-        }
-        cerr << "Meoda necunaoscuta: " << method_call_exp->mothod_name << endl;
-        return nullopt;
     }
 
     auto function_call_exp = dynamic_cast<FunctionCallExpression *>(expresion);
@@ -1136,32 +1476,87 @@ optional<Value> evaluate_expresion(Expression *expresion)
         }
         Value collection_value = *collection_result;
 
-        if (!holds_alternative<shared_ptr<ListValue>>(collection_value))
+        if (holds_alternative<shared_ptr<ListValue>>(collection_value))
         {
-            cerr << "Operatia se poate aplica doar pe liste" << endl;
-            return nullopt;
+
+            auto list = get<shared_ptr<ListValue>>(collection_value);
+            auto indx_result = evaluate_expresion(indx_expression->indx.get());
+            if (!indx_result)
+                return nullopt;
+
+            Value indx = *indx_result;
+
+            if (!holds_alternative<BigInt>(indx))
+            {
+                cerr << "Indexare imposibila" << endl;
+                return nullopt;
+            }
+            BigInt index = get<BigInt>(indx);
+
+            if (index < 0 ||
+                static_cast<size_t>(index) >= list->elements.size())
+            {
+                cerr << "Index in afara listei" << endl;
+                return nullopt;
+            }
+            return list->elements[static_cast<size_t>(get<BigInt>(indx))];
         }
-        auto list = get<shared_ptr<ListValue>>(collection_value);
-        auto indx_result = evaluate_expresion(indx_expression->indx.get());
-        if (!indx_result)
-            return nullopt;
-
-        Value indx = *indx_result;
-
-        if (!holds_alternative<int>(indx))
+        else if (holds_alternative<shared_ptr<DictionaryValue>>(collection_value))
         {
-            cerr << "Indexare imposibila" << endl;
-            return nullopt;
+            auto dict = get<shared_ptr<DictionaryValue>>(collection_value);
+            auto indx_res = evaluate_expresion(indx_expression->indx.get());
+            if (!indx_res)
+                return nullopt;
+            Value indx = *indx_res;
+            if (!holds_alternative<string>(indx))
+                return nullopt;
+            if (!dict->map.count(get<string>(indx)))
+            {
+                Value temp = BigInt(0);
+                dict->map[get<string>(indx)] = temp;
+            }
+            return dict->map[get<string>(indx)];
         }
-        int index = get<int>(indx);
-
-        if (index < 0 ||
-            static_cast<size_t>(index) >= list->elements.size())
+        else if (holds_alternative<string>(collection_value))
         {
-            cerr << "Index in afara listei" << endl;
-            return nullopt;
+            string s = get<string>(collection_value);
+            auto indx_almost = evaluate_expresion(indx_expression->indx.get());
+            if (!indx_almost)
+                return nullopt;
+            Value indx = *indx_almost;
+            if (!holds_alternative<BigInt>(indx))
+            {
+                cerr << "Eroare indx !int " << endl;
+                return nullopt;
+            }
+            if (get<BigInt>(indx) < 0 || static_cast<size_t>(get<BigInt>(indx)) >= s.size())
+            {
+                cerr << "Index out of bounds";
+                return nullopt;
+            }
+            string ans = "";
+            ans += s[static_cast<size_t>(get<BigInt>(indx))];
+            return Value{ans};
         }
-        return list->elements[get<int>(indx)];
+        return nullopt;
+    }
+
+    auto *dict_exp = dynamic_cast<MapExpression *>(expresion);
+
+    if (dict_exp)
+    {
+        auto dict = make_shared<DictionaryValue>();
+        for (size_t i = 0; i < dict_exp->keys.size(); i++)
+        {
+            auto key = evaluate_expresion(dict_exp->keys[i].get());
+            auto val = evaluate_expresion(dict_exp->vals[i].get());
+            if (!key || !val)
+                return nullopt;
+            if (!holds_alternative<string>(*key))
+                return nullopt;
+            dict->map[get<string>(*key)] = *val;
+        }
+        return dict;
     }
 
     auto *list_exp = dynamic_cast<ListExpression *>(expresion);
@@ -1233,10 +1628,10 @@ optional<Value> evaluate_expresion(Expression *expresion)
             return ans;
         }
 
-        if (holds_alternative<string>(left) && holds_alternative<int>(right) && op == TokenType::MULTIPLY)
+        if (holds_alternative<string>(left) && holds_alternative<BigInt>(right) && op == TokenType::MULTIPLY)
         {
             string ans1 = "";
-            int num_times = get<int>(right);
+            BigInt num_times = get<BigInt>(right);
             string Left = get<string>(left);
             if (num_times < 0)
             {
@@ -1256,7 +1651,7 @@ optional<Value> evaluate_expresion(Expression *expresion)
             return Value{
                 value_to_string(left) + value_to_string(right)};
         }
-        if (holds_alternative<int>(left) != holds_alternative<int>(right))
+        if (holds_alternative<BigInt>(left) != holds_alternative<BigInt>(right))
         {
             cerr << "Operatie invalida" << endl;
 
@@ -1293,12 +1688,8 @@ optional<Value> evaluate_expresion(Expression *expresion)
 
         if (is_comparison(op))
         {
-            if (holds_alternative<string>(left) != holds_alternative<string>(right))
-            {
-                cerr << "Operatie invalida" << endl;
-                return nullopt;
-            }
-            if (holds_alternative<string>(left))
+
+            if (holds_alternative<string>(left) && holds_alternative<string>(right))
             {
                 if (op == TokenType::EQUALS)
                 {
@@ -1331,64 +1722,113 @@ optional<Value> evaluate_expresion(Expression *expresion)
                     return ans;
                 }
             }
-            else if (holds_alternative<int>(left))
+            else if (holds_alternative<BigInt>(left) && holds_alternative<BigInt>(right))
             {
                 if (op == TokenType::EQUALS)
                 {
-                    ans = (get<int>(left) == get<int>(right));
+                    ans = (get<BigInt>(left) == get<BigInt>(right));
                     return ans;
                 }
                 else if (op == TokenType::NOT_EQUALS)
                 {
-                    ans = (get<int>(left) != get<int>(right));
+                    ans = (get<BigInt>(left) != get<BigInt>(right));
                     return ans;
                 }
                 else if (op == TokenType::LESS_THAN)
                 {
-                    ans = (get<int>(left) < get<int>(right));
+                    ans = (get<BigInt>(left) < get<BigInt>(right));
                     return ans;
                 }
                 else if (op == TokenType::LESSEQQ_THAN)
                 {
-                    ans = (get<int>(left) <= get<int>(right));
+                    ans = (get<BigInt>(left) <= get<BigInt>(right));
                     return ans;
                 }
                 else if (op == TokenType::GRATER_THAN)
                 {
-                    ans = (get<int>(left) > get<int>(right));
+                    ans = (get<BigInt>(left) > get<BigInt>(right));
                     return ans;
                 }
                 else
                 {
-                    ans = (get<int>(left) >= get<int>(right));
+                    ans = (get<BigInt>(left) >= get<BigInt>(right));
                     return ans;
                 }
+            }
+            else if (holds_alternative<bool>(left) && holds_alternative<bool>(right))
+            {
+                if (op == TokenType::EQUALS)
+                    return Value{get<bool>(left) == get<bool>(right)};
+                if (op == TokenType::NOT_EQUALS)
+                    return Value{(get<bool>(left) != get<bool>(right))};
+                cerr << "Operatie invalida pe doua obiecte de tip bool" << endl;
+                return nullopt;
+            }
+            else if (holds_alternative<shared_ptr<ListValue>>(left) && holds_alternative<shared_ptr<ListValue>>(right))
+            {
+                auto l1 = get<shared_ptr<ListValue>>(left);
+                auto l2 = get<shared_ptr<ListValue>>(right);
+                if (op == TokenType::EQUALS)
+                {
+                    if (l1->elements.size() != l2->elements.size())
+                        return Value{false};
+
+                    for (size_t i = 0; i < l1->elements.size(); i++)
+                        if (!value_equals(l1->elements[i], l2->elements[i]))
+                            return Value{false};
+
+                    return Value{true};
+                }
+                if (op == TokenType::NOT_EQUALS)
+                {
+                    if (l1->elements.size() != l2->elements.size())
+                        return Value{true};
+
+                    for (size_t i = 0; i < l1->elements.size(); i++)
+                        if (!value_equals(l1->elements[i], l2->elements[i]))
+                            return Value{true};
+                }
+                cerr << "Operatorul nu poate fii executat pe acest tip de date" << endl;
+                return nullopt;
+            }
+            else if (holds_alternative<shared_ptr<DictionaryValue>>(left) && holds_alternative<shared_ptr<DictionaryValue>>(right))
+            {
+                auto d1 = get<shared_ptr<DictionaryValue>>(left);
+                auto d2 = get<shared_ptr<DictionaryValue>>(right);
+                if (op == TokenType::EQUALS)
+                {
+                    return Value{value_equals(left, right)};
+                }
+                if (op == TokenType::NOT_EQUALS)
+                    return Value{!value_equals(left, right)};
+                cerr << "Operatorul nu poate fii aplicat pe acest tip de date" << endl;
+                return nullopt;
             }
         }
 
         if (op == TokenType::PLUS)
-            ans = get<int>(left) + get<int>(right);
+            ans = get<BigInt>(left) + get<BigInt>(right);
         else if (op == TokenType::MINUS)
-            ans = get<int>(left) - get<int>(right);
+            ans = get<BigInt>(left) - get<BigInt>(right);
         else if (op == TokenType::MULTIPLY)
-            ans = get<int>(left) * get<int>(right);
+            ans = get<BigInt>(left) * get<BigInt>(right);
         else if (op == TokenType::DIV)
         {
-            if (get<int>(right) == 0)
+            if (get<BigInt>(right) == 0)
             {
                 cerr << "Division by zero imposibile " << endl;
                 return nullopt;
             }
-            ans = get<int>(left) / get<int>(right);
+            ans = get<BigInt>(left) / get<BigInt>(right);
         }
         else if (op == TokenType::MOD)
         {
-            if (get<int>(right) == 0)
+            if (get<BigInt>(right) == 0)
             {
                 cerr << "Modulo by 0 imposibile" << endl;
                 return nullopt;
             }
-            ans = get<int>(left) % get<int>(right);
+            ans = get<BigInt>(left) % get<BigInt>(right);
         }
 
         return ans;
@@ -1403,9 +1843,9 @@ optional<Value> evaluate_expresion(Expression *expresion)
             if (!right_result)
                 return nullopt;
             Value right = *right_result;
-            if (holds_alternative<int>(right))
+            if (holds_alternative<BigInt>(right))
             {
-                Value ans = -1 * (get<int>(right));
+                Value ans = -1 * (get<BigInt>(right));
                 return ans;
             }
             else if (holds_alternative<string>(right))
@@ -1460,6 +1900,56 @@ optional<bool> evaluate_condition(Expression *expression)
 
 ExecutionResult Execute_statement(Statement *statement)
 {
+
+    auto *indx_assign_statement = dynamic_cast<IndexAssignmentStatement *>(statement);
+    if (indx_assign_statement)
+    {
+        auto element = indx_assign_statement->target.get();
+        auto list_res = evaluate_expresion(element->collection.get());
+        if (!list_res)
+            return {false, nullopt};
+
+        auto indx_res = evaluate_expresion(element->indx.get());
+        if (!indx_res)
+            return {false, nullopt};
+        if (holds_alternative<shared_ptr<ListValue>>(*list_res))
+        {
+            auto list = get<shared_ptr<ListValue>>(*list_res);
+            if (!holds_alternative<BigInt>(*indx_res))
+            {
+                cerr << "Indxare cu noninteger " << endl;
+                return {false, nullopt};
+            }
+            auto indx = get<BigInt>(*indx_res);
+            if ((indx) < 0 || static_cast<size_t>(indx) >= list->elements.size())
+            {
+                cerr << "Eroare Index out of bounds  " << endl;
+                return {false, nullopt};
+            }
+            auto new_val_res = evaluate_expresion(indx_assign_statement->new_val.get());
+            if (!new_val_res)
+                return {false, nullopt};
+            Value var = *new_val_res;
+            list->elements[size_t(indx)] = var;
+        }
+        else if (holds_alternative<shared_ptr<DictionaryValue>>(*list_res))
+        {
+            auto dict = get<shared_ptr<DictionaryValue>>(*list_res);
+            if (!holds_alternative<string>(*indx_res))
+            {
+                cerr << "Cheie incorecta type !string " << endl;
+                return {false, nullopt};
+            }
+            string key = get<string>(*indx_res);
+            auto new_val_res = evaluate_expresion(indx_assign_statement->new_val.get());
+            if (!new_val_res)
+                return {false, nullopt};
+            Value new_val = *new_val_res;
+            dict->map[key] = new_val;
+        }
+        return {false, nullopt};
+    }
+
     auto *shout = dynamic_cast<ShoutStatement *>(statement);
     if (shout != nullptr)
     {
@@ -1470,6 +1960,38 @@ ExecutionResult Execute_statement(Statement *statement)
         print_value(var_to_be_shouted, terminal);
         return {false, nullopt};
         ;
+    }
+
+    auto for_state = dynamic_cast<ForStatement *>(statement);
+    if (for_state)
+    {
+        Execute_statement(for_state->start.get());
+        auto is_ok_res = evaluate_expresion(for_state->condition.get());
+        if (!is_ok_res)
+            return {false, nullopt};
+        Value is_ok = *is_ok_res;
+        Value copy = is_ok;
+        while (turn_boolean(is_ok))
+        {
+            for (size_t i = 0; i < for_state->body.size(); i++)
+            {
+                auto res = Execute_statement(for_state->body[i].get());
+                if (res.did_return)
+                    return res;
+            }
+            Execute_statement(for_state->step.get());
+            auto is_ok_1 = evaluate_expresion(for_state->condition.get());
+            if (!is_ok_1)
+                return {false, nullopt};
+            ;
+            is_ok = *is_ok_1;
+            if ((holds_alternative<bool>(is_ok) != holds_alternative<bool>(copy)) || (holds_alternative<BigInt>(is_ok) != holds_alternative<BigInt>(copy)) || (holds_alternative<string>(is_ok) != holds_alternative<string>(copy)))
+            {
+                cerr << "Conditia nu isi poate schimba tipul " << endl;
+                return {false, nullopt};
+                ;
+            }
+        }
     }
 
     auto return_state = dynamic_cast<ReturnStatemet *>(statement);
@@ -1513,9 +2035,7 @@ ExecutionResult Execute_statement(Statement *statement)
         }
     }
 
-    auto *expression_statement =
-        dynamic_cast<ExpressionStatement *>(statement);
-
+    auto *expression_statement = dynamic_cast<ExpressionStatement *>(statement);
     if (expression_statement)
     {
         evaluate_expresion(expression_statement->expression.get());
@@ -1531,8 +2051,6 @@ ExecutionResult Execute_statement(Statement *statement)
         auto var_res = evaluate_expresion(let->expression.get());
         if (!var_res)
             return {false, nullopt};
-        ;
-
         Value var = *var_res;
         variables[var_name] = var;
     }
@@ -1569,7 +2087,6 @@ ExecutionResult Execute_statement(Statement *statement)
         auto is_ok_res = evaluate_expresion(while_state->condition.get());
         if (!is_ok_res)
             return {false, nullopt};
-        ;
         Value is_ok = *is_ok_res;
         Value copy = is_ok;
         while (turn_boolean(is_ok))
@@ -1585,7 +2102,7 @@ ExecutionResult Execute_statement(Statement *statement)
                 return {false, nullopt};
             ;
             is_ok = *is_ok_1;
-            if ((holds_alternative<bool>(is_ok) != holds_alternative<bool>(copy)) || (holds_alternative<int>(is_ok) != holds_alternative<int>(copy)) || (holds_alternative<string>(is_ok) != holds_alternative<string>(copy)))
+            if ((holds_alternative<bool>(is_ok) != holds_alternative<bool>(copy)) || (holds_alternative<BigInt>(is_ok) != holds_alternative<BigInt>(copy)) || (holds_alternative<string>(is_ok) != holds_alternative<string>(copy)))
             {
                 cerr << "Conditia nu isi poate schimba tipul " << endl;
                 return {false, nullopt};
@@ -1603,7 +2120,7 @@ void Evaluator(vector<unique_ptr<Statement>> &state)
         Execute_statement(p);
     }
 }
-/*
+
 int main()
 {
 
@@ -1670,11 +2187,4 @@ int main()
     for (auto tk : whole_tokens)
         for (auto tt : tk)
             tt.print();
-}
-*/
-int main()
-{
-    string penis = "12345678901234567890";
-    BigInt p(penis);
-    p.print();
 }

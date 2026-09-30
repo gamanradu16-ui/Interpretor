@@ -1,29 +1,9 @@
-fun is_prime(a)
-    if a < 2
-        return false
-    end
+let x = hear int
 
-    if a % 2 == 0 and a != 2
-        return false
-    end
+shout x  + endl
 
-    let i = 3 
-    while i * i < a 
-        if a % i == 0
-            return false
-        end
-        i = i + 2
-    end
-
-    return true
-
-end
-
-let i = 0 
-
-while i < 100
-    if(is_prime(i))
-        shout i  + endl
-    end
-    i = i + 1
+if x % 2 ==0 
+    shout "numarul tau este par"
+else 
+    shout "numarul tau este impar"
 end

@@ -6,14 +6,25 @@
 #include <utility>
 #include <variant>
 #include <cstdint>
+#include <unordered_map>
+#include <algorithm>
+#include <boost/multiprecision/cpp_int.hpp>
+
+using BigInt = boost::multiprecision::cpp_int;
+struct DictionaryValue;
 struct ListValue;
 
 using Value = std::variant<
-    int,
+    BigInt,
     bool,
     std::string,
-    std::shared_ptr<ListValue>>;
+    std::shared_ptr<ListValue>,
+    std::shared_ptr<DictionaryValue>>;
 
+struct DictionaryValue
+{
+    std::unordered_map<std::string, Value> map;
+};
 struct ListValue
 {
     std::vector<Value> elements;
@@ -21,7 +32,14 @@ struct ListValue
 
 enum class TokenType
 {
+    HEAR,
+    OPEN_SWIRLY,
+    DOUBLE_DOTS,
+    CLOSED_SWIRLY,
+    FOR,
     OPEN_LIST,
+    MAP,
+    INT,
     FUNCTION,
     RETURN,
     CLOSED_LIST,
@@ -67,6 +85,20 @@ std::string print_out_type(TokenType type)
 {
     switch (type)
     {
+    case TokenType::DOUBLE_DOTS:
+        return "DOUBLE_DOTS";
+    case TokenType::OPEN_SWIRLY:
+        return "OPEN_SWIRLY";
+    case TokenType::CLOSED_SWIRLY:
+        return "CLOSED_SWIRLY";
+    case TokenType::MAP:
+        return "MAP";
+    case TokenType::FOR:
+        return "FOR";
+    case TokenType::HEAR:
+        return "HEAR";
+    case TokenType::INT:
+        return "INT";
     case TokenType::FUNCTION:
         return "FUNCTION";
     case TokenType::RETURN:
@@ -234,6 +266,18 @@ TokenType type_of_token(std::string word)
 
     if (word == "let")
         return TokenType::LET;
+    else if (word == ":")
+        return TokenType::DOUBLE_DOTS;
+    else if (word == "{")
+        return TokenType::OPEN_SWIRLY;
+    else if (word == "}")
+        return TokenType::CLOSED_SWIRLY;
+    else if (word == "for")
+        return TokenType::FOR;
+    else if (word == "int")
+        return TokenType::INT;
+    else if (word == "hear")
+        return TokenType::HEAR;
     else if (word == "fun")
         return TokenType::FUNCTION;
     else if (word == "return")
@@ -353,6 +397,13 @@ public:
     LiteralExpression(Value val) : val(val) {}
 };
 
+class HearExpression : public Expression
+{
+public:
+    TokenType token;
+    HearExpression(TokenType token = TokenType::UNKNOWN) : token(token) {}
+};
+
 class VariableExpression : public Expression
 {
 public:
@@ -397,6 +448,18 @@ public:
     ListExpression(std::vector<std::unique_ptr<Expression>> elements)
     {
         this->elements = std::move(elements);
+    }
+};
+
+class MapExpression : public Expression
+{
+public:
+    std::vector<std::unique_ptr<Expression>> keys;
+    std::vector<std::unique_ptr<Expression>> vals;
+    MapExpression(std::vector<std::unique_ptr<Expression>> keys = {}, std::vector<std::unique_ptr<Expression>> vals = {})
+    {
+        this->keys = std::move(keys);
+        this->vals = std::move(vals);
     }
 };
 
@@ -543,53 +606,30 @@ public:
     }
 };
 
-class BigInt
+class ForStatement : public Statement
 {
 public:
-    bool negative;
-    std::vector<uint32_t> digits;
-
-    uint32_t return_digit(std::string p)
+    std::unique_ptr<Expression> condition;
+    std::unique_ptr<AssignmentStatement> step;
+    std::unique_ptr<LetStatement> start;
+    std::vector<std::unique_ptr<Statement>> body;
+    ForStatement(std::unique_ptr<LetStatement> start = nullptr, std::unique_ptr<Expression> condition = nullptr, std::unique_ptr<AssignmentStatement> step = nullptr, std::vector<std::unique_ptr<Statement>> body = {})
     {
-        uint32_t ans = 0;
-        for (size_t i = 0; i < p.size(); i++)
-            ans = ans * 10 + (p[i] - '0');
-        return ans;
+        this->start = std::move(start);
+        this->condition = std::move(condition);
+        this->step = std::move(step);
+        this->body = std::move(body);
     }
+};
 
-    BigInt(std::string &text)
+class IndexAssignmentStatement : public Statement
+{
+public:
+    std::unique_ptr<Expression> new_val;
+    std::unique_ptr<IndexExpression> target;
+    IndexAssignmentStatement(std::unique_ptr<IndexExpression> target = nullptr, std::unique_ptr<Expression> new_val = nullptr)
     {
-        size_t start = 0;
-        if (text[0] == '-')
-        {
-            negative = true;
-            start = 1;
-        }
-        else
-            negative = false;
-
-        if (text.size() % 9 != 0)
-        {
-            int rest = text.size() % 9;
-            uint32_t digit = 0;
-            digit = return_digit(text.substr(start, rest));
-            digits.push_back(digit);
-            start = start + rest;
-        }
-        for (size_t i = start; i < text.size(); i += 9)
-            digits.push_back(return_digit(text.substr(i, 9)));
-
-      
-
-        if (digits[0] == 0 && negative)
-            negative = false;
-        
-        
-    }
-
-    void print()
-    {
-        for (size_t i = 0; i < digits.size(); i++)
-            std::cout << digits[i] << " ";
+        this->target = std::move(target);
+        this->new_val = std::move(new_val);
     }
 };
