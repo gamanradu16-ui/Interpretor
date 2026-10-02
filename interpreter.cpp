@@ -17,6 +17,8 @@ ofstream terminal("output.txt");
 struct ExecutionResult
 {
     bool did_return = false;
+    bool break_state = false;
+    bool continue_state = false;
     std::optional<Value> value = std::nullopt;
 };
 void print_value(const Value &value, ostream &out)
@@ -125,6 +127,52 @@ bool value_equals(Value &a, Value &b)
     }
 
     return false;
+}
+
+Value copy_value(Value &p)
+{
+    if (holds_alternative<BigInt>(p))
+    {
+        Value ans = BigInt(get<BigInt>(p));
+        return ans;
+    }
+    if (holds_alternative<string>(p))
+    {
+        string s = "";
+        string p_string = get<string>(p);
+        for (size_t i = 0; i < p_string.size(); i++)
+            s += p_string[i];
+        return Value{s};
+    }
+    if (holds_alternative<bool>(p))
+    {
+        bool new_p = get<bool>(p);
+        return Value{new_p};
+    }
+    if (holds_alternative<shared_ptr<ListValue>>(p))
+    {
+        auto list = get<shared_ptr<ListValue>>(p);
+        auto new_list = make_shared<ListValue>();
+        for (size_t i = 0; i < list->elements.size(); i++)
+        {
+            Value cp = copy_value(list->elements[i]);
+            new_list->elements.push_back(cp);
+        }
+        return Value{new_list};
+    }
+    if (holds_alternative<shared_ptr<DictionaryValue>>(p))
+    {
+        auto dict = get<shared_ptr<DictionaryValue>>(p);
+        auto mp = make_shared<DictionaryValue>();
+        for (auto indx : dict->map)
+        {
+            string key = indx.first;
+            Value val = copy_value(indx.second);
+            mp->map[key] = val;
+        }
+        return Value{mp};
+    }
+    return Value{false};
 }
 
 string value_to_string(const Value &value)
@@ -838,6 +886,33 @@ unique_ptr<Statement> Parser(vector<vector<Token>> &whole_tokens, size_t &line_n
         return nullptr;
     }
 
+    if (line_tokens[0].get_type() == TokenType::COMMENTARY)
+    {
+        return nullptr;
+    }
+
+    if (line_tokens[0].get_type() == TokenType::BREAK)
+    {
+        if (line_tokens.size() > 2)
+        {
+            cerr << "Eroare break + unknown command " << endl;
+            return nullptr;
+        }
+
+        line_number++;
+        return make_unique<BreakStatement>();
+    }
+    if (line_tokens[0].get_type() == TokenType::CONTINUE)
+    {
+        if (line_tokens.size() > 2)
+        {
+            cerr << "Eroare continue + unknown command" << endl;
+            return nullptr;
+        }
+        line_number++;
+        return make_unique<ContinueStatement>();
+    }
+
     if (line_tokens[0].get_type() == TokenType::RETURN)
     {
         size_t current = 1;
@@ -1294,6 +1369,76 @@ optional<Value> evaluate_expresion(Expression *expresion)
                 }
                 return Value{static_cast<BigInt>(list->elements.size())};
             }
+            else if (method_call_exp->mothod_name == "to_string")
+            {
+                if (!method_call_exp->arguments.empty())
+                {
+                    cerr << "Eroare metoda to_string nu are argumente" << endl;
+                    return nullopt;
+                }
+                return Value{value_to_string(object)};
+            }
+            else if (method_call_exp->mothod_name == "join")
+            {
+
+                if (method_call_exp->arguments.size() == 0)
+                {
+
+                    string ans = "";
+                    for (size_t i = 0; i < list->elements.size(); i++)
+                    {
+                        if (!holds_alternative<string>(list->elements[i]))
+                        {
+                            cerr << "Eroare join se aplica pe liste de stringuri " << endl;
+                            return nullopt;
+                        }
+                        ans += get<string>(list->elements[i]);
+                    }
+                    return Value{ans};
+                }
+                else if (method_call_exp->arguments.size() == 1)
+                {
+                    auto padding = evaluate_expresion(method_call_exp->arguments[0].get());
+                    if (!padding)
+                    {
+                        cerr << "Eroare apelare incorecta --> join(expresie invalida)" << endl;
+                        return nullopt;
+                    }
+                    if (!holds_alternative<string>(*padding))
+                    {
+                        cerr << "Eroare apelare corecta --> join(string)" << endl;
+                        return nullopt;
+                    }
+                    string ans = "";
+
+                    for (size_t i = 0; i < list->elements.size(); i++)
+                    {
+                        if (!holds_alternative<string>(list->elements[i]))
+                        {
+                            cerr << "Eroare join se aplica pe liste de stringuri " << endl;
+                            return nullopt;
+                        }
+                        ans += get<string>(list->elements[i]);
+                        if (i != list->elements.size() - 1)
+                            ans += get<string>(*padding);
+                    }
+                    return Value{ans};
+                }
+                else
+                {
+                    cerr << "Metoda join nu are mai mult de 1 argument" << endl;
+                    return nullopt;
+                }
+            }
+            else if (method_call_exp->mothod_name == "copy")
+            {
+                if (!method_call_exp->arguments.empty())
+                {
+                    cerr << "Metoda copy nu are argumente " << endl;
+                    return nullopt;
+                }
+                return copy_value(object);
+            }
             else if (method_call_exp->mothod_name == "pop")
             {
                 if (method_call_exp->arguments.empty())
@@ -1320,7 +1465,7 @@ optional<Value> evaluate_expresion(Expression *expresion)
                         return nullopt;
                     }
 
-                    if (get<BigInt>(indx) < 0 || list->elements.size() <= static_cast<size_t>(get<BigInt>(indx)))
+                    if (get<BigInt>(indx) < 0 || list->elements.size() <= (get<BigInt>(indx)))
                     {
                         cerr << "Index imposibil" << endl;
                         return nullopt;
@@ -1376,6 +1521,100 @@ optional<Value> evaluate_expresion(Expression *expresion)
                 }
                 return Value{static_cast<BigInt>(s.size())};
             }
+            else if (method_call_exp->mothod_name == "list")
+            {
+                if (!method_call_exp->arguments.empty())
+                {
+                    cerr << "Metoda list() nu accepta argumente" << endl;
+                    return nullopt;
+                }
+                auto list_return = make_shared<ListValue>();
+                for (size_t i = 0; i < s.size(); i++)
+                {
+                    string p = "";
+                    p += s[i];
+                    list_return->elements.push_back(Value{p});
+                }
+                return Value{list_return};
+            }
+            else if (method_call_exp->mothod_name == "find")
+            {
+                if (method_call_exp->arguments.empty())
+                {
+                    cerr << "Metoda find asteapta argument" << endl;
+                    return nullopt;
+                }
+                if (method_call_exp->arguments.size() == 1)
+                {
+                    auto to_be_found_res = evaluate_expresion(method_call_exp->arguments[0].get());
+                    if (!to_be_found_res)
+                    {
+                        cerr << "Eroare metoda find asteapta argument valid";
+                        return nullopt;
+                    }
+                    if (!holds_alternative<string>(*to_be_found_res))
+                    {
+                        cerr << "Eroare metoda find asteapta argument string" << endl;
+                        return nullopt;
+                    }
+                    string s_to_be_found = get<string>(*to_be_found_res);
+                    if (s.find(s_to_be_found) == string::npos)
+                        return Value{BigInt(-1)};
+                    return Value{BigInt(s.find(s_to_be_found))};
+                }
+            }
+            else if (method_call_exp->mothod_name == "split")
+            {
+                if (method_call_exp->arguments.empty())
+                {
+                    string s_to_be_split = s;
+                    stringstream ss(s);
+                    auto list = make_shared<ListValue>();
+                    string word;
+                    while (ss >> word)
+                        list->elements.push_back(Value{word});
+
+                    return Value{list};
+                }
+                else if (method_call_exp->arguments.size() == 1)
+                {
+                    auto exp = evaluate_expresion(method_call_exp->arguments[0].get());
+                    if (!exp)
+                    {
+                        cerr << "Eroare spli(expresie invalida) " << endl;
+                        return nullopt;
+                    }
+                    if (!holds_alternative<string>(*exp))
+                    {
+                        cerr << "Eroare split(non-string)" << endl;
+                        return nullopt;
+                    }
+
+                    if (get<string>(*exp) == "")
+                    {
+                        string s_to_be_split = s;
+                        stringstream ss(s);
+                        auto list = make_shared<ListValue>();
+                        string word;
+                        while (ss >> word)
+                            list->elements.push_back(Value{word});
+
+                        return Value{list};
+                    }
+
+                    string divider = get<string>(*exp);
+                    auto list = make_shared<ListValue>();
+                    size_t start = 0;
+                    size_t poz;
+                    while ((poz = s.find(divider, start)) != string::npos)
+                    {
+                        list->elements.push_back(Value{s.substr(start, poz - start)});
+                        start = poz + divider.size();
+                    }
+                    list->elements.push_back(Value{s.substr(start)});
+                    return Value{list};
+                }
+            }
             cerr << "Meoda necunaoscuta: " << method_call_exp->mothod_name << endl;
             return nullopt;
         }
@@ -1401,11 +1640,126 @@ optional<Value> evaluate_expresion(Expression *expresion)
                     cerr << "Cheie invalida " << endl;
                     return nullopt;
                 }
-                Value ans = dict->map[get<string>(val)];
-                return ans;
+                if (dict->map.count(get<string>(val)))
+                    return Value{true};
+                else
+                    return Value{false};
             }
-            cerr << "Meoda necunaoscuta: " << method_call_exp->mothod_name << endl;
-            return nullopt;
+            else if (method_call_exp->mothod_name == "to_string")
+            {
+                if (!method_call_exp->arguments.empty())
+                {
+                    cerr << "Metoda to_string nu are argumente" << endl;
+                    return nullopt;
+                }
+                return Value{value_to_string(object)};
+            }
+            else if (method_call_exp->mothod_name == "size")
+            {
+                if (!method_call_exp->arguments.empty())
+                {
+                    cerr << "eroare metoda size nu accepta argumente " << endl;
+                    return nullopt;
+                }
+                return Value{BigInt(dict->map.size())};
+            }
+            else if (method_call_exp->mothod_name == "keys")
+            {
+                if (!method_call_exp->arguments.empty())
+                {
+                    cerr << "Eroare metoda keys nu accepta argumente" << endl;
+                    return nullopt;
+                }
+                auto list = make_shared<ListValue>();
+                for (auto p : dict->map)
+                    list->elements.push_back(Value{p.first});
+                return Value{list};
+            }
+            else if (method_call_exp->mothod_name == "values")
+            {
+                if (!method_call_exp->arguments.empty())
+                {
+                    cerr << "Eroare metoda values nu accepta argumente" << endl;
+                    return nullopt;
+                }
+                auto list = make_shared<ListValue>();
+                for (auto p : dict->map)
+                    list->elements.push_back(Value{p.second});
+                return Value{list};
+            }
+            else if (method_call_exp->mothod_name == "remove")
+            {
+                if (method_call_exp->arguments.size() != 1)
+                {
+                    cerr << "Eroare metoda remove asteapta un argument" << endl;
+                    return nullopt;
+                }
+                auto string_res = evaluate_expresion(method_call_exp->arguments[0].get());
+                if (!string_res)
+                {
+                    cerr << "Eroare remve(expresie invalida) " << endl;
+                    return nullopt;
+                }
+                if (!holds_alternative<string>(*string_res))
+                {
+                    cerr << "Eroare remove asteapta argument tip string" << endl;
+                    return nullopt;
+                }
+                string s = get<string>(*string_res);
+                if (dict->map.count(s))
+                    dict->map.erase(s);
+            }
+            else if (method_call_exp->mothod_name == "copy")
+            {
+                if (!method_call_exp->arguments.empty())
+                {
+                    cerr << "Eroare metoda empty nu accepta argumente" << endl;
+                    return nullopt;
+                }
+                auto new_dict = copy_value(object);
+                return new_dict;
+            }
+            else
+            {
+                cerr << "Meoda necunaoscuta: " << method_call_exp->mothod_name << endl;
+                return nullopt;
+            }
+        }
+        else if (holds_alternative<BigInt>(object))
+        {
+            if (method_call_exp->mothod_name == "to_string")
+            {
+                if (!method_call_exp->arguments.empty())
+                {
+                    cerr << "Metoda to_string nu accepta argumente" << endl;
+                    return nullopt;
+                }
+                return Value{value_to_string(object)};
+            }
+            else
+            {
+
+                cerr << "Metoda " << method_call_exp->mothod_name << " nu exista " << endl;
+                return nullopt;
+            }
+        }
+        else if (holds_alternative<bool>(object))
+        {
+
+            if (method_call_exp->mothod_name == "to_string")
+            {
+                if (!method_call_exp->arguments.empty())
+                {
+                    cerr << "Metoda to_string nu are argumente" << endl;
+                    return nullopt;
+                }
+                return Value{value_to_string(object)};
+            }
+            else
+            {
+                cerr << "Metoda " << method_call_exp->mothod_name << " nu exista " << endl;
+                return nullopt;
+            }
         }
     }
 
@@ -1493,8 +1847,7 @@ optional<Value> evaluate_expresion(Expression *expresion)
             }
             BigInt index = get<BigInt>(indx);
 
-            if (index < 0 ||
-                static_cast<size_t>(index) >= list->elements.size())
+            if (index < 0 || (index) >= list->elements.size())
             {
                 cerr << "Index in afara listei" << endl;
                 return nullopt;
@@ -1529,7 +1882,7 @@ optional<Value> evaluate_expresion(Expression *expresion)
                 cerr << "Eroare indx !int " << endl;
                 return nullopt;
             }
-            if (get<BigInt>(indx) < 0 || static_cast<size_t>(get<BigInt>(indx)) >= s.size())
+            if (get<BigInt>(indx) < 0 || (get<BigInt>(indx)) >= s.size())
             {
                 cerr << "Index out of bounds";
                 return nullopt;
@@ -1787,6 +2140,8 @@ optional<Value> evaluate_expresion(Expression *expresion)
                     for (size_t i = 0; i < l1->elements.size(); i++)
                         if (!value_equals(l1->elements[i], l2->elements[i]))
                             return Value{true};
+
+                    return Value{false};
                 }
                 cerr << "Operatorul nu poate fii executat pe acest tip de date" << endl;
                 return nullopt;
@@ -1850,7 +2205,10 @@ optional<Value> evaluate_expresion(Expression *expresion)
             }
             else if (holds_alternative<string>(right))
             {
+
                 string s = get<string>(right);
+                if (s.empty())
+                    return Value{s};
                 size_t i, j;
                 i = 0;
                 j = s.size() - 1;
@@ -1901,34 +2259,46 @@ optional<bool> evaluate_condition(Expression *expression)
 ExecutionResult Execute_statement(Statement *statement)
 {
 
+    auto *continue_statement = dynamic_cast<ContinueStatement *>(statement);
+    if (continue_statement)
+    {
+        return {false, false, true, nullopt};
+    }
+
+    auto *break_statement = dynamic_cast<BreakStatement *>(statement);
+    if (break_statement)
+    {
+        return {false, true, false, nullopt};
+    }
+
     auto *indx_assign_statement = dynamic_cast<IndexAssignmentStatement *>(statement);
     if (indx_assign_statement)
     {
         auto element = indx_assign_statement->target.get();
         auto list_res = evaluate_expresion(element->collection.get());
         if (!list_res)
-            return {false, nullopt};
+            return {false, false, false, nullopt};
 
         auto indx_res = evaluate_expresion(element->indx.get());
         if (!indx_res)
-            return {false, nullopt};
+            return {false, false, false, nullopt};
         if (holds_alternative<shared_ptr<ListValue>>(*list_res))
         {
             auto list = get<shared_ptr<ListValue>>(*list_res);
             if (!holds_alternative<BigInt>(*indx_res))
             {
                 cerr << "Indxare cu noninteger " << endl;
-                return {false, nullopt};
+                return {false, false, false, nullopt};
             }
             auto indx = get<BigInt>(*indx_res);
-            if ((indx) < 0 || static_cast<size_t>(indx) >= list->elements.size())
+            if ((indx) < 0 || (indx) >= list->elements.size())
             {
                 cerr << "Eroare Index out of bounds  " << endl;
-                return {false, nullopt};
+                return {false, false, false, nullopt};
             }
             auto new_val_res = evaluate_expresion(indx_assign_statement->new_val.get());
             if (!new_val_res)
-                return {false, nullopt};
+                return {false, false, false, nullopt};
             Value var = *new_val_res;
             list->elements[size_t(indx)] = var;
         }
@@ -1938,16 +2308,16 @@ ExecutionResult Execute_statement(Statement *statement)
             if (!holds_alternative<string>(*indx_res))
             {
                 cerr << "Cheie incorecta type !string " << endl;
-                return {false, nullopt};
+                return {false, false, false, nullopt};
             }
             string key = get<string>(*indx_res);
             auto new_val_res = evaluate_expresion(indx_assign_statement->new_val.get());
             if (!new_val_res)
-                return {false, nullopt};
+                return {false, false, false, nullopt};
             Value new_val = *new_val_res;
             dict->map[key] = new_val;
         }
-        return {false, nullopt};
+        return {false, false, false, nullopt};
     }
 
     auto *shout = dynamic_cast<ShoutStatement *>(statement);
@@ -1955,10 +2325,10 @@ ExecutionResult Execute_statement(Statement *statement)
     {
         auto var_to_be_shouted_res = evaluate_expresion(shout->expresion.get());
         if (!var_to_be_shouted_res)
-            return {false, nullopt};
+            return {false, false, false, nullopt};
         Value var_to_be_shouted = *var_to_be_shouted_res;
         print_value(var_to_be_shouted, terminal);
-        return {false, nullopt};
+        return {false, false, false, nullopt};
         ;
     }
 
@@ -1968,7 +2338,7 @@ ExecutionResult Execute_statement(Statement *statement)
         Execute_statement(for_state->start.get());
         auto is_ok_res = evaluate_expresion(for_state->condition.get());
         if (!is_ok_res)
-            return {false, nullopt};
+            return {false, false, false, nullopt};
         Value is_ok = *is_ok_res;
         Value copy = is_ok;
         while (turn_boolean(is_ok))
@@ -1978,17 +2348,25 @@ ExecutionResult Execute_statement(Statement *statement)
                 auto res = Execute_statement(for_state->body[i].get());
                 if (res.did_return)
                     return res;
+                if (res.continue_state)
+                {
+                    break;
+                }
+                if (res.break_state)
+                {
+                    return {false, false, false, nullopt};
+                }
             }
             Execute_statement(for_state->step.get());
             auto is_ok_1 = evaluate_expresion(for_state->condition.get());
             if (!is_ok_1)
-                return {false, nullopt};
+                return {false, false, false, nullopt};
             ;
             is_ok = *is_ok_1;
             if ((holds_alternative<bool>(is_ok) != holds_alternative<bool>(copy)) || (holds_alternative<BigInt>(is_ok) != holds_alternative<BigInt>(copy)) || (holds_alternative<string>(is_ok) != holds_alternative<string>(copy)))
             {
                 cerr << "Conditia nu isi poate schimba tipul " << endl;
-                return {false, nullopt};
+                return {false, false, false, nullopt};
                 ;
             }
         }
@@ -1999,16 +2377,16 @@ ExecutionResult Execute_statement(Statement *statement)
     {
         auto val_res = evaluate_expresion(return_state->exp.get());
         if (!val_res)
-            return {false, nullopt};
+            return {false, false, false, nullopt};
 
-        return {true, *val_res};
+        return {true, false, false, *val_res};
     }
 
     auto function_state = dynamic_cast<FunctionStatement *>(statement);
     if (function_state)
     {
         functions[function_state->name] = function_state;
-        return {false, nullopt};
+        return {false, false, false, nullopt};
     }
 
     auto *assign_state = dynamic_cast<AssignmentStatement *>(statement);
@@ -2017,20 +2395,20 @@ ExecutionResult Execute_statement(Statement *statement)
         string var_name = assign_state->variable_name;
         auto val_to_res = evaluate_expresion(assign_state->expresion.get());
         if (!val_to_res)
-            return {false, nullopt};
+            return {false, false, false, nullopt};
         ;
 
         Value val_to = *val_to_res;
         if (variables.count(var_name))
         {
             variables[var_name] = val_to;
-            return {false, nullopt};
+            return {false, false, false, nullopt};
             ;
         }
         else
         {
             cerr << "Variabila nu exista " << endl;
-            return {false, nullopt};
+            return {false, false, false, nullopt};
             ;
         }
     }
@@ -2040,8 +2418,7 @@ ExecutionResult Execute_statement(Statement *statement)
     {
         evaluate_expresion(expression_statement->expression.get());
 
-        return {false, nullopt};
-        ;
+        return {false, false, false, nullopt};
     }
 
     auto *let = dynamic_cast<LetStatement *>(statement);
@@ -2050,7 +2427,7 @@ ExecutionResult Execute_statement(Statement *statement)
         string var_name = let->variable_name;
         auto var_res = evaluate_expresion(let->expression.get());
         if (!var_res)
-            return {false, nullopt};
+            return {false, false, false, nullopt};
         Value var = *var_res;
         variables[var_name] = var;
     }
@@ -2059,7 +2436,7 @@ ExecutionResult Execute_statement(Statement *statement)
     {
         auto is_ok_res = evaluate_condition(if_state->condition.get());
         if (!is_ok_res)
-            return {false, nullopt};
+            return {false, false, false, nullopt};
         ;
         Value is_ok = *is_ok_res;
         if (turn_boolean(is_ok))
@@ -2069,6 +2446,12 @@ ExecutionResult Execute_statement(Statement *statement)
                 auto res = Execute_statement(if_state->then_body[i].get());
                 if (res.did_return)
                     return res;
+                if (res.break_state)
+                {
+                    return {false, true, false, nullopt};
+                }
+                if (res.continue_state)
+                    return {false, false, true, nullopt};
             }
         }
         else
@@ -2078,6 +2461,14 @@ ExecutionResult Execute_statement(Statement *statement)
                 auto res = Execute_statement(if_state->else_body[i].get());
                 if (res.did_return)
                     return res;
+                if (res.break_state)
+                {
+                    return {false, true, false, nullopt};
+                }
+                if (res.continue_state)
+                {
+                    return {false, false, true, nullopt};
+                }
             }
         }
     }
@@ -2086,7 +2477,7 @@ ExecutionResult Execute_statement(Statement *statement)
     {
         auto is_ok_res = evaluate_expresion(while_state->condition.get());
         if (!is_ok_res)
-            return {false, nullopt};
+            return {false, false, false, nullopt};
         Value is_ok = *is_ok_res;
         Value copy = is_ok;
         while (turn_boolean(is_ok))
@@ -2096,21 +2487,27 @@ ExecutionResult Execute_statement(Statement *statement)
                 auto res = Execute_statement(while_state->body[i].get());
                 if (res.did_return)
                     return res;
+                if (res.break_state)
+                {
+                    return {false, false, false, nullopt};
+                }
+                if (res.continue_state)
+                    break;
             }
             auto is_ok_1 = evaluate_expresion(while_state->condition.get());
             if (!is_ok_1)
-                return {false, nullopt};
+                return {false, false, false, nullopt};
             ;
             is_ok = *is_ok_1;
             if ((holds_alternative<bool>(is_ok) != holds_alternative<bool>(copy)) || (holds_alternative<BigInt>(is_ok) != holds_alternative<BigInt>(copy)) || (holds_alternative<string>(is_ok) != holds_alternative<string>(copy)))
             {
                 cerr << "Conditia nu isi poate schimba tipul " << endl;
-                return {false, nullopt};
+                return {false, false, false, nullopt};
                 ;
             }
         }
     }
-    return {false, nullopt};
+    return {false, false, false, nullopt};
 }
 void Evaluator(vector<unique_ptr<Statement>> &state)
 {
@@ -2148,10 +2545,13 @@ int main()
         if (line.empty())
             continue;
 
+        if (line[0] == '#')
+            continue;
+
         vector<string> token = tokenizer(line);
+
         for (auto word : token)
         {
-            cout << word << endl;
             line_tokens.push_back(Token(type_of_token(word), word, line_number));
         }
 
@@ -2167,7 +2567,7 @@ int main()
         unique_ptr<Statement> p = Parser(whole_tokens, curent_line_number);
         if (p == nullptr)
         {
-            cerr << "Eroare la lina " << whole_tokens[curent_line_number][0].get_line_number() << endl;
+            cerr << "Eroare" << endl;
             return 3;
         }
         state.push_back(move(p));
@@ -2183,8 +2583,10 @@ int main()
         end - start);
 
     std::cout << "Timp: " << time.count() << " microsecunde\n";
+    /*
+        for (auto tk : whole_tokens)
+            for (auto tt : tk)
+                tt.print();
 
-    for (auto tk : whole_tokens)
-        for (auto tt : tk)
-            tt.print();
+            */
 }

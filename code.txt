@@ -1,9 +1,3 @@
-let x = hear int
-
-shout x  + endl
-
-if x % 2 ==0 
-    shout "numarul tau este par"
-else 
-    shout "numarul tau este impar"
-end
+let a = [1,[2,3]]
+a.push(a)
+shout a

@@ -13,7 +13,7 @@
 using BigInt = boost::multiprecision::cpp_int;
 struct DictionaryValue;
 struct ListValue;
-
+struct SetValue;
 using Value = std::variant<
     BigInt,
     bool,
@@ -33,6 +33,9 @@ struct ListValue
 enum class TokenType
 {
     HEAR,
+    COMMENTARY,
+    BREAK,
+    CONTINUE,
     OPEN_SWIRLY,
     DOUBLE_DOTS,
     CLOSED_SWIRLY,
@@ -85,6 +88,12 @@ std::string print_out_type(TokenType type)
 {
     switch (type)
     {
+    case TokenType::COMMENTARY:
+        return "COMENTARY";
+    case TokenType::BREAK:
+        return "BREAK";
+    case TokenType::CONTINUE:
+        return "CONTINUE";
     case TokenType::DOUBLE_DOTS:
         return "DOUBLE_DOTS";
     case TokenType::OPEN_SWIRLY:
@@ -266,6 +275,12 @@ TokenType type_of_token(std::string word)
 
     if (word == "let")
         return TokenType::LET;
+    else if (word == "#")
+        return TokenType::COMMENTARY;
+    else if (word == "break")
+        return TokenType::BREAK;
+    else if (word == "continue")
+        return TokenType::CONTINUE;
     else if (word == ":")
         return TokenType::DOUBLE_DOTS;
     else if (word == "{")
@@ -491,6 +506,7 @@ public:
     }
 };
 
+
 class Statement
 {
 public:
@@ -632,4 +648,16 @@ public:
         this->target = std::move(target);
         this->new_val = std::move(new_val);
     }
+};
+
+class ContinueStatement : public Statement
+{
+public:
+    ContinueStatement() {}
+};
+
+class BreakStatement : public Statement
+{
+public:
+    BreakStatement() {}
 };
