@@ -9,6 +9,7 @@
 #include <memory>
 #include <utility>
 #include <chrono>
+#include <unordered_set>
 #include <optional>
 
 using namespace std;
@@ -21,6 +22,9 @@ struct ExecutionResult
     bool continue_state = false;
     std::optional<Value> value = std::nullopt;
 };
+
+unordered_set<const ListValue *> error_list;
+
 void print_value(const Value &value, ostream &out)
 {
     if (holds_alternative<BigInt>(value))
@@ -37,17 +41,32 @@ void print_value(const Value &value, ostream &out)
     }
     else if (holds_alternative<shared_ptr<ListValue>>(value))
     {
-        auto list = get<shared_ptr<ListValue>>(value);
 
+        auto list = get<shared_ptr<ListValue>>(value);
+        auto pointer_to_list = list.get();
+        error_list.insert(pointer_to_list);
         out << "[";
 
         for (size_t i = 0; i < list->elements.size(); i++)
         {
             if (i > 0)
                 out << ", ";
-
-            print_value(list->elements[i], out);
+            if (holds_alternative<shared_ptr<ListValue>>(list->elements[i]) && error_list.count(get<shared_ptr<ListValue>>(list->elements[i]).get()))
+            {
+                cerr << "Eroare lista care se contine pe sine nu se poate afisa " << endl;
+                return;
+            }
+            if (holds_alternative<shared_ptr<ListValue>>(list->elements[i]))
+            {
+                print_value(list->elements[i], out);
+                error_list.erase(get<shared_ptr<ListValue>>(list->elements[i]).get());
+            }
+            else
+            {
+                print_value(list->elements[i], out);
+            }
         }
+        error_list.erase(pointer_to_list);
 
         out << "]";
     }
@@ -152,9 +171,16 @@ Value copy_value(Value &p)
     if (holds_alternative<shared_ptr<ListValue>>(p))
     {
         auto list = get<shared_ptr<ListValue>>(p);
+        auto pointer_to_list = list.get();
         auto new_list = make_shared<ListValue>();
         for (size_t i = 0; i < list->elements.size(); i++)
         {
+            if (holds_alternative<shared_ptr<ListValue>>(list->elements[i]) &&
+                pointer_to_list == get<shared_ptr<ListValue>>(list->elements[i]).get())
+            {
+                cerr << "Eroare lista care se contine pe sine nu se poate copia" << endl;
+                return Value{false};
+            }
             Value cp = copy_value(list->elements[i]);
             new_list->elements.push_back(cp);
         }
@@ -330,6 +356,7 @@ vector<string> tokenizer(string line)
 
 unordered_map<string, Value> variables;
 unordered_map<string, FunctionStatement *> functions;
+
 bool is_comparison(TokenType p)
 {
 

@@ -14,7 +14,8 @@ The project is under development. Implemented features and known limitations are
 - Functions with parameters and `return`.
 - Input through `hear` and `hear int`; output through `shout`.
 - Content-based comparison and deep copying for collections without cycles.
-- Partial support for `break` and `continue`; see the limitations below.
+- `break` and `continue` in loops, including inside `if` branches.
+- Full-line comments with `#` as the first character of the line.
 
 ## Requirements and build
 
@@ -110,13 +111,14 @@ Expected output: `one-two-three` and `8`, on separate lines.
 | Dictionary | `size()`, `count(key)`, `keys()`, `values()`, `remove(key)`, `copy()`, `to_string()` |
 | Integer / boolean | `to_string()` |
 
-`find` returns the zero-based position of the first match, or `-1` if no match exists. `split()` splits on whitespace; `split(separator)` uses the specified separator string and may preserve empty fragments. Empty separators are not yet handled correctly.
+`find` returns the zero-based position of the first match, or `-1` if no match exists. `split()` splits on whitespace. `split("")` also splits on whitespace. With a nonempty separator, `split(separator)` uses the specified separator string and may preserve empty fragments.
 
 `pop` removes and returns an element. `remove` deletes a key if it exists, but does not yet provide a return value usable in expressions.
 
 ## Value semantics
 
 - List and string indexing starts at zero; negative indices are rejected.
+- `break` exits the innermost executing loop. `continue` skips the remaining statements in the current iteration; a `for` loop still executes its step before checking its condition again. Both branches of `if` propagate these signals to the enclosing loop.
 - Strings and numbers are copied by value. Lists and dictionaries are shared through `shared_ptr`: assigning a collection to another variable does not automatically create an independent copy.
 - `copy()` recursively creates new collections for structures without cycles.
 - `values()` creates a new list, but any collections contained in its values remain shared.
@@ -136,11 +138,11 @@ Expected output: `one-two-three` and `8`, on separate lines.
 
 - Runtime errors are not consistently distinguished from normal statement completion; some errors allow execution to continue.
 - Some invalid type combinations can lead to incorrect extraction from `std::variant`; equality between different types is not handled consistently.
-- Loops propagate `break`, which can also stop enclosing loops. The true branch of an `if` does not propagate `continue`.
-- Collection printing, comparison, and copying do not detect cycles. Avoid collections that directly or indirectly contain themselves; `shared_ptr` cycles can also prevent memory from being released.
-- `split("")` does not advance through the string and can hang the program.
+- Cycle handling is incomplete. List printing tracks list addresses and detects cycles reached through list elements, but cycles involving dictionaries can still escape detection. An early return can leave an address in the global tracking set and produce incomplete output or affect later printing, including `to_string()`.
+- Copying detects direct list self-reference only and returns the boolean `false` on that error; an enclosing copy can treat it as an ordinary value. Indirect cycles and dictionary cycles remain unsupported. Collection equality has no cycle detection.
+- Avoid collections that directly or indirectly contain themselves. Cyclic `shared_ptr` ownership can prevent memory from being released even when printing detects a cycle.
 - Input through `hear` does not fully distinguish empty input from a failed read.
-- Comments and escape sequences are not implemented; tab indentation and whitespace-only lines are not fully handled.
+- Only full-line comments beginning with `#` in the first column are skipped. Indented and inline comments are not supported. Escape sequences are not implemented; tab indentation and whitespace-only lines are not fully handled.
 - There is no automated test suite yet. The examples above describe expected results and do not establish correctness for all execution cases.
 
-Priorities: error and loop-control propagation, type validation, regression tests, local function environments, and splitting the implementation into modules.
+Priorities: consistent error propagation, complete cycle handling, type validation, regression tests, local function environments, and splitting the implementation into modules.
